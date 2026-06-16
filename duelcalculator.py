@@ -1,80 +1,74 @@
 import streamlit as st
 import math
 
-# 超幾何分布を用いた「1枚以上引く確率」
 def prob_any(total_deck, hand_size, n):
     if n <= 0 or n > total_deck: return 0.0
     return 1.0 - (math.comb(total_deck - n, hand_size) / math.comb(total_deck, hand_size))
 
+def prob_combo(total_deck, hand_size, card_counts):
+    # コンボ成立確率（各カードを1枚以上引く確率の積）
+    p = 1.0
+    for count in card_counts:
+        p *= prob_any(total_deck, hand_size, count)
+    return p
+
 def main():
     st.title("初動率計算")
-
     deck_size = st.slider("デッキ合計枚数", 40, 60, 40)
-    hand_size = st.slider("初手枚数", 3, 7, 5)
+    hand_size = st.slider("初手枚数", 3, 8, 5)
 
     if 'deck' not in st.session_state: st.session_state.deck = {}
+    if 'combos' not in st.session_state: st.session_state.combos = []
 
-    # フォームを使用して入力の競合を防ぎ、リセットを自動化する
-    with st.form(key="add_card_form", clear_on_submit=True):
-        col1, col2, col3 = st.columns([3, 1, 1])
-        name = col1.text_input("カード名")
-        count = col2.number_input("枚数", 1, 4, 3)
-        submit_button = col3.form_submit_button("追加")
-        
-        if submit_button and name:
-            st.session_state.deck[name] = count
+    # 1. カード登録
+    with st.form(key="add_card", clear_on_submit=True):
+        c1, c2, c3 = st.columns([3, 1, 1])
+        name = c1.text_input("カード名")
+        count = c2.number_input("枚数", 1, 4, 3)
+        if c3.form_submit_button("追加"): st.session_state.deck[name] = count
 
+    # 2. 1枚初動計算
     st.write("---")
-    
-    # リスト表示・チェック
-    h = st.columns([2, 1, 1, 1, 1, 1])
-    h[0].write("**カード名**"); h[1].write("**枚**"); h[2].write("**初**"); h[3].write("**A**"); h[4].write("**B**"); h[5].write("**C**")
-
-    starters, g_a, g_b, g_c = [], [], [], []
-    
-    # リストのコピーを作成してループ
+    st.subheader("1枚初動")
+    starters = []
     for card in list(st.session_state.deck.keys()):
-        cols = st.columns([2, 1, 1, 1, 1, 1, 1])
+        cols = st.columns([3, 1, 1, 1])
         cols[0].text(card)
         st.session_state.deck[card] = cols[1].number_input("枚", 1, 4, st.session_state.deck[card], key=f"n_{card}", label_visibility="collapsed")
-        
-        if cols[2].checkbox("初", key=f"s_{card}"): starters.append(st.session_state.deck[card])
-        if cols[3].checkbox("A", key=f"a_{card}"): g_a.append(st.session_state.deck[card])
-        if cols[4].checkbox("B", key=f"b_{card}"): g_b.append(st.session_state.deck[card])
-        if cols[5].checkbox("C", key=f"c_{card}"): g_c.append(st.session_state.deck[card])
-        
-        if cols[6].button("削", key=f"d_{card}"): 
-            del st.session_state.deck[card]
-            st.rerun()
+        if cols[2].checkbox("初動", key=f"s_{card}"): starters.append(st.session_state.deck[card])
+        if cols[3].button("削除", key=f"d_{card}"): del st.session_state.deck[card]; st.rerun()
 
-    st.write("---")
-    
-    # 各グループを引く確率
-    s_sum, a_sum, b_sum, c_sum = sum(starters), sum(g_a), sum(g_b), sum(g_c)
+    s_sum = sum(starters)
     p_s = prob_any(deck_size, hand_size, s_sum)
-    p_a = prob_any(deck_size, hand_size, a_sum)
-    p_b = prob_any(deck_size, hand_size, b_sum)
-    p_c = prob_any(deck_size, hand_size, c_sum)
+    st.metric("1枚初動率", f"{p_s*100:.2f}%")
 
-    # 複合コンボ確率
-    p_ab = p_a * p_b
-    p_abc = p_a * p_b * p_c
+    # 3. コンボ計算＆合計
+    st.write("---")
+    st.subheader("コンボ初動")
+    selected = st.multiselect("カードを選んでコンボ追加", list(st.session_state.deck.keys()))
+    if st.button("コンボに追加"): st.session_state.combos.append(selected)
 
-    # 包含排除による「いずれか成立する確率」の厳密計算
-    p_union = p_s + p_ab + p_abc - (p_s*p_ab + p_s*p_abc + p_ab*p_abc) + (p_s*p_ab*p_abc)
+    combo_probs = []
+    for i, combo in enumerate(st.session_state.combos):
+        counts = [st.session_state.deck[c] for c in combo]
+        p = prob_combo(deck_size, hand_size, counts)
+        combo_probs.append(p)
+        st.write(f"コンボ{i+1}: {' + '.join(combo)} ({p*100:.2f}%)")
+        if st.button(f"コンボ{i+1}削除", key=f"del_c_{i}"):
+            st.session_state.combos.pop(i); st.rerun()
 
-    # 結果表示
-    st.subheader("確率")
-    r1, r2, r3, r4 = st.columns(4)
-    r1.metric("1枚初動", f"{p_s*100:.2f}%")
-    r2.metric("AB初動", f"{p_ab*100:.2f}%")
-    r3.metric("ABC初動", f"{p_abc*100:.2f}%")
-    r4.metric("合計", f"{max(0, p_union)*100:.2f}%")
-
-    st.info(f"内訳: 初動:{s_sum} / A:{a_sum} / B:{b_sum} / C:{c_sum}")
+    # 合計確率の計算（「いずれかのコンボが成立する」確率）
+    # 簡易的に「1枚初動」＋「全コンボ」で計算（重複を考慮した厳密計算は複雑なため、ここでは近似として提示）
+    if combo_probs:
+        # すべてのコンボが失敗する確率を計算して1から引く手法
+        fail_p = (1 - p_s)
+        for p in combo_probs:
+            fail_p *= (1 - p)
+        total_p = 1 - fail_p
+        st.metric("合計初動率", f"{total_p*100:.2f}%")
 
     if st.button("全リセット"):
-        st.session_state.deck = {}; st.rerun()
+        st.session_state.deck = {}; st.session_state.combos = []; st.rerun()
 
 if __name__ == "__main__":
     main()
